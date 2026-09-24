@@ -1,0 +1,17 @@
+{
+  "name": "paroksh-local-vision",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Local, browser-side Qwen3.5-0.8B Vision-Language Model worker for PAROKSH.",
+  "scripts": {
+    "build:worker": "vite build -c vite.worker.config.ts"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8"
+  }
+}
