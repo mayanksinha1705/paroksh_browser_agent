@@ -1,68 +1,161 @@
 # PAROKSH — AI Browser Agent
 
-PAROKSH is a Chrome extension that lets an AI agent operate your browser
-(click, type, scroll, navigate, fill forms) toward a goal you give it in
-plain English, while keeping everything it *sees* privacy-safe.
+**PAROKSH** is a Chrome extension that enables AI-powered browser automation through visual understanding of web pages.
 
-This is the **unified build**: the base PAROKSH agent, the local Qwen3.5-0.8B
-vision step, and the PrivacyShield redaction pipeline all live in this one
-project and are wired together end-to-end (see the pipeline below). For the
-detailed security write-up of the PrivacyShield integration specifically, see
-`frontend/PRIVACY_SHIELD_INTEGRATION.md`.
+It combines **local, on-device vision**, **privacy-preserving screenshot redaction**, and a server-side vision-language model to understand the current browser state and perform actions such as clicking, typing, scrolling, navigating, and filling forms.
 
-> A second, deliberately stripped-down build without PrivacyShield exists
-> separately for isolating whether PrivacyShield was the cause of a given
-> agent failure. It is **not** part of this project — this build always
-> redacts before anything leaves the browser.
+The goal is simple:
 
-## Architecture (Phase 1)
+> **Let an AI agent understand and operate a browser while keeping sensitive visual information protected before it leaves the device.**
 
+---
+
+## ✨ Key Features
+
+* 🧠 **Local Vision Understanding** — Qwen3.5-0.8B runs locally in the browser.
+* 🔒 **PrivacyShield** — Detects and redacts sensitive information from screenshots before transmission.
+* 👁️ **Visual Browser Automation** — Uses screenshots and page context to determine the next action.
+* 🖱️ **Trusted Browser Input** — Supports reliable CLICK, TYPE, HOVER, and KEY actions through Chrome DevTools Protocol.
+* 🔄 **Multi-step Agent Loop** — Continuously observes, decides, acts, and verifies until the requested task is completed.
+* 🛡️ **Anti-loop & Verification Logic** — Prevents repeated actions and requires visual confirmation before declaring a task complete.
+* 💬 **Natural-language Interaction** — Users describe what they want in plain English.
+* ⚡ **Local WebGPU/WASM Support** — Local vision can use WebGPU when available, with WASM fallback.
+* 🧩 **Chrome Extension Architecture** — Built using Manifest V3.
+
+---
+
+## 🏗️ Architecture
+
+```text
+                    ┌──────────────────────────┐
+                    │      User Instruction     │
+                    │   "Search for X on Web"  │
+                    └────────────┬─────────────┘
+                                 │
+                                 ▼
+                    ┌──────────────────────────┐
+                    │      PAROKSH Extension    │
+                    │       Chrome / MV3        │
+                    └────────────┬─────────────┘
+                                 │
+                                 ▼
+                    ┌──────────────────────────┐
+                    │     Browser Screenshot     │
+                    │        Raw Pixels          │
+                    └────────────┬─────────────┘
+                                 │
+                                 ▼
+              ┌──────────────────────────────────────┐
+              │       Qwen3.5-0.8B Local Vision      │
+              │                                      │
+              │  Runs inside browser via Web Worker  │
+              │       WebGPU / WASM + Transformers.js│
+              └──────────────────┬───────────────────┘
+                                 │
+                                 │ Textual UI description
+                                 ▼
+              ┌──────────────────────────────────────┐
+              │          PrivacyShield                │
+              │                                      │
+              │ OCR → Detection → Fusion → Redaction │
+              └──────────────────┬───────────────────┘
+                                 │
+                                 │ Sanitized screenshot
+                                 ▼
+              ┌──────────────────────────────────────┐
+              │          Node.js Backend               │
+              │                                      │
+              │        localhost:3000                │
+              └──────────────────┬───────────────────┘
+                                 │
+                                 ▼
+              ┌──────────────────────────────────────┐
+              │          Ollama / Gemma               │
+              │                                      │
+              │    Action decision + chat response   │
+              └──────────────────┬───────────────────┘
+                                 │
+                                 │ Structured action
+                                 ▼
+              ┌──────────────────────────────────────┐
+              │         PAROKSH Action Executor       │
+              │                                      │
+              │     CLICK / TYPE / HOVER / KEY /     │
+              │       SCROLL / NAVIGATE / DONE       │
+              └──────────────────┬───────────────────┘
+                                 │
+                                 ▼
+                       ┌─────────────────────┐
+                       │   Browser Action    │
+                       └─────────────────────┘
 ```
-Browser screenshot (raw)
-        │
-        ▼
-Qwen3.5-0.8B  — local, on-device, in a Web Worker
-        │              (frontend/local-vision/)
-        ▼
-short text description of layout/UI (never the image)
-        │
-        ▼
-PrivacyShield — local OCR + PII detection + fusion + redaction
-        │              (frontend/privacy-shield/)
-        ▼
-sanitized screenshot
-        │
-        ▼
-Node.js backend (backend/) ── receives ONLY the sanitized screenshot
-        │                     + Qwen's text description (informational)
-        ▼
-server-side VLM (Ollama/Gemma) → structured action JSON
-        │
-        ▼
-existing agent loop → action executor → browser action
+
+---
+
+## 🔐 Privacy Architecture
+
+Privacy is a core part of PAROKSH's architecture.
+
+The browser first captures the current screen. The local vision model analyzes the visual layout **inside the browser** and produces a textual description.
+
+Before a screenshot is sent to the backend, **PrivacyShield processes the image locally**.
+
+Its pipeline includes:
+
+```text
+Screenshot
+    ↓
+Image Validation
+    ↓
+OCR
+    ↓
+Entity / PII Detection
+    ↓
+Detection Fusion
+    ↓
+Privacy Policy
+    ↓
+Pixel Redaction
+    ↓
+Sanitized Screenshot
 ```
 
-**The raw screenshot never leaves the browser.** Qwen runs entirely
-in-browser (WebGPU when available, WASM otherwise) via Transformers.js's
-native `Qwen3_5ForConditionalGeneration` class (added in Transformers.js
-v4.0, see [PR #1551](https://github.com/huggingface/transformers.js/pull/1551);
-this project already depends on `@huggingface/transformers ^4.2.0`, which
-includes it) and only ever produces a short text description, which is what — together with the *sanitized*
-screenshot — reaches the Node.js backend. Qwen never clicks, types, or
-scrolls; it only provides visual understanding. PrivacyShield remains the
-only component that actually redacts pixels, and it does not depend on the
-backend or on Qwen: if Qwen fails to load or times out, PrivacyShield still
-runs and the step still proceeds with an empty local-vision description. If
-PrivacyShield itself fails, the step stops — that is the actual privacy
-boundary.
+Only the **sanitized screenshot** is sent to the Node.js backend.
 
-## Model placement
+The raw screenshot is not intentionally transmitted to the backend.
 
-Model files are **not** included and are not downloaded automatically. Copy
-your Qwen3.5-0.8B ONNX export into:
+If the local Qwen vision model fails to initialize, the privacy pipeline can still operate independently. If the PrivacyShield pipeline fails, the automation step is stopped rather than bypassing the privacy boundary.
 
-```
+---
+
+## 🧠 Local Vision
+
+PAROKSH uses **Qwen3.5-0.8B** as its local vision-language component.
+
+The model runs inside the browser using:
+
+* Transformers.js
+* Web Workers
+* WebGPU when available
+* WASM fallback
+* ONNX model files
+
+The local vision component is responsible for **visual understanding**, not browser interaction.
+
+It generates a short textual description of the visible interface which can then be used by the action-planning model.
+
+### Model location
+
+Place the Qwen ONNX model files in:
+
+```text
 frontend/local-vision/model/Qwen3.5-0.8B-ONNX/
+```
+
+Expected structure:
+
+```text
+Qwen3.5-0.8B-ONNX/
 ├── config.json
 ├── generation_config.json
 ├── preprocessor_config.json
@@ -79,181 +172,436 @@ frontend/local-vision/model/Qwen3.5-0.8B-ONNX/
     └── vision_encoder_fp16.onnx_data
 ```
 
-## Install & build
+**Model weights are intentionally not included in this repository.**
 
-### 1. PrivacyShield (existing, unchanged)
+---
 
-```powershell
-cd frontend/privacy-shield
+## 🛡️ PrivacyShield
+
+PrivacyShield is the local privacy layer responsible for protecting sensitive information in screenshots.
+
+The implementation contains modules for:
+
+* OCR
+* Visual detection
+* Rule-based detection
+* Entity normalization
+* PII fusion
+* Privacy policies
+* Image preprocessing
+* Image validation
+* Canvas-based redaction
+* Runtime detection
+* Fail-closed handling
+* Audit logging
+
+Main location:
+
+```text
+frontend/privacy-shield/
+```
+
+---
+
+## 🤖 Backend
+
+The backend is a lightweight Node.js server that acts as the bridge between the Chrome extension and Ollama.
+
+It exposes:
+
+```text
+GET  /api/health
+POST /api/action
+POST /api/reply
+```
+
+Default address:
+
+```text
+http://localhost:3000
+```
+
+The backend communicates with Ollama at:
+
+```text
+http://localhost:11434
+```
+
+The action model is configured as:
+
+```text
+gemma4:31b-cloud
+```
+
+The same model is currently used for generating natural-language responses.
+
+---
+
+# 🚀 Getting Started
+
+## Requirements
+
+Before running PAROKSH, install:
+
+* Google Chrome
+* Node.js 18+
+* npm
+* Ollama
+* Required Ollama model
+* Qwen3.5-0.8B ONNX model files
+
+---
+
+## 1. Clone the Repository
+
+```bash
+git clone https://github.com/mayanksinha1705/paroksh_browser_agent.git
+cd paroksh_browser_agent
+```
+
+---
+
+## 2. Install Local Vision Dependencies
+
+```bash
+cd frontend/local-vision
+npm install
+```
+
+Build the local vision worker:
+
+```bash
+npm run build:worker
+```
+
+This generates:
+
+```text
+frontend/local-vision/qwen-worker.bundle.js
+```
+
+---
+
+## 3. Add the Qwen Model
+
+Copy the required Qwen3.5-0.8B ONNX files into:
+
+```text
+frontend/local-vision/model/Qwen3.5-0.8B-ONNX/
+```
+
+The repository intentionally does not include the large model weights.
+
+---
+
+## 4. Build PrivacyShield
+
+```bash
+cd ../privacy-shield
 npm ci
 npm run build:extension
 ```
 
-Produces `frontend/extension-core/privacy-shield.bundle.js`.
+This generates the PrivacyShield extension bundle used by PAROKSH.
 
-### 2. Local Vision (Qwen3.5-0.8B) — new in Phase 1
+---
 
-```powershell
-cd frontend/local-vision
-npm install
-npm run build:worker
-```
+## 5. Build the Extension UI
 
-Produces `frontend/local-vision/qwen-worker.bundle.js`. Then copy your model
-files as described above.
-
-### 3. Popup UI (existing, unchanged)
-
-```powershell
-cd frontend/popup-src
+```bash
+cd ../popup-src
 npm install
 npm run build
 ```
 
-### 4. Backend (existing, unchanged — still Node.js, still not Ollama-free)
+---
 
-```powershell
+## 6. Start the Backend
+
+Open a new terminal:
+
+```bash
 cd backend
 npm install
 npm start
 ```
 
-Runs on `http://localhost:3000` and talks to Ollama on `http://localhost:11434`.
+The backend should start at:
 
-### 5. Load the extension
-
-Open `chrome://extensions`, enable Developer Mode, "Load unpacked", and
-select the `frontend/` folder (where `manifest.json` lives).
-
-## Live pipeline status
-
-While a task is running, the panel now shows a live "Pipeline" trace of
-exactly what's happening at each step: reading the page, capturing the
-screenshot, sending it to Qwen3.5-0.8B, PrivacyShield redaction, sending the
-redacted screenshot to `gemma4:31b-cloud`, and executing the resulting
-action. This is pushed from `background.js` (`broadcastStatus()`) to the
-panel in real time — no polling — and disappears once the step-by-step
-"Browser Activity" summary takes over after the run finishes.
-
-**This trace (and the task itself) now survives page navigations.** A full
-page navigation destroys and recreates the panel's `<iframe>` (fresh React
-state, `isBusy` back to `false`) even though `background.js`'s agent loop
-keeps running unaffected. The panel now asks `background.js`
-(`GET_TASK_STATUS`) on every mount whether a task is still in flight for
-this tab and, if so, resumes watching it — replaying the pipeline trace so
-far instead of showing a blank one — and separately listens for a
-`PAROKSH_TASK_RESULT` broadcast so the final chat reply lands even if the
-panel that originally started the task no longer exists to receive its
-direct response.
-
-## Trusted key input (Enter, Tab, etc.)
-
-`KEY` actions (most commonly pressing Enter after typing into a search box)
-are now always executed via Chrome DevTools Protocol (`Input.dispatchKeyEvent`,
-already used for CLICK/TYPE on Google Docs/Forms) instead of a synthetic
-`KeyboardEvent`. Browsers and most sites (Google Search, YouTube, etc.)
-ignore untrusted (`isTrusted: false`) key events for default actions like
-submitting a search — a plain `dispatchEvent()` looked like it worked but
-silently did nothing, which is why "type a query and press Enter" tasks
-were unreliable.
-
-## Trusted input by default (CLICK, TYPE, HOVER, KEY)
-
-This goes further than just KEY: **CLICK, TYPE, HOVER, and KEY now all go
-through the Chrome DevTools Protocol by default**, not just as a Google-Docs
-fallback. `background.js` resolves a real screen point for every action —
-either the center of the element's own manifest rectangle (looked up by
-`element_id`, computed fresh every step from the same rectangles already
-used to draw the numbered boxes) or the model's explicit `x`/`y` for
-canvas-rendered UIs like Google Docs — then dispatches a real
-`Input.dispatchMouseEvent`/`Input.dispatchKeyEvent`/`Input.insertText` at
-that point. TYPE does a real single→double→triple click at that same point
-first — the same click-count-based approach Puppeteer/Playwright use — so
-it always replaces a field's contents instead of appending, scoped to that
-one field only. (An earlier version of this used a global Ctrl+A +
-Backspace before typing; that was removed since it could select/clear the
-wrong thing if focus timing was ever slightly off — a triple-click can't.)
-
-**Why this matters:** a synthetic DOM event (`el.click()`, `el.value = ...`,
-a plain `dispatchEvent(new KeyboardEvent(...))`) is never `isTrusted`, and
-plenty of modern sites — especially anything React/Polymer/Lit-based, like
-YouTube — either explicitly check `isTrusted` or keep their own internal
-input state separate from the raw DOM value, so a synthetic version can
-silently do nothing or fall out of sync even though it "looks" like it
-worked. CDP's `Input` domain produces the same trusted, OS-level events a
-real mouse/keyboard would.
-
-A single debugger session is now attached for the **whole task** (not
-per-action — that used to flicker Chrome's "being debugged" banner on and
-off for every click) and stays attached across in-tab navigations, since a
-CDP session is scoped to the tab, not the page. If attaching fails for any
-reason (most commonly: real DevTools is already open on that tab), the
-whole task falls back to the previous DOM-level execution path instead of
-failing outright — you'll see `(trusted)` in the activity log for actions
-that went through CDP, and its absence for ones that fell back.
-
-**`SELECT` intentionally still uses DOM-level execution, not CDP.** A native
-`<select>`'s open dropdown list is rendered by the OS/browser chrome, not
-the page — CDP mouse coordinates can't reach it. Setting `.value` and
-dispatching `change` works reliably here specifically because browsers (and
-virtually all sites) don't gate `change` events on `<select>` by trust the
-way they gate Enter-to-submit — this isn't a gap so much as the right tool
-for that one element type. Custom (non-native) dropdowns were already
-handled as two CLICK actions per the system prompt, so they get the CDP
-path automatically.
-
-## Verifying Qwen initialization
-
-1. With the backend running and the extension loaded, open any page and run
-   a task from the PAROKSH panel.
-2. Open the page's DevTools console. On the first step you should see no
-   `PAROKSH Local Vision` warnings — a warning like `Local Vision
-   unavailable` or `Local Vision analysis skipped` means Qwen didn't load
-   (most commonly: model files not copied in yet, or `qwen-worker.bundle.js`
-   not built). This is non-fatal — the agent keeps working with PrivacyShield
-   and the backend model exactly as before.
-3. To test Qwen directly without running a full task, open the page's
-   DevTools console and run:
-   ```js
-   await window.PAROKSH_LOCAL_VISION.initialize(console.log);
-   await window.PAROKSH_LOCAL_VISION.analyzeScreenshot(
-     document.querySelector('img')?.src || 'data:image/png;base64,...',
-     'Describe this image.'
-   );
-   ```
-   A successful call returns `{ text: "..." }` with Qwen's description.
-
-## Testing the privacy boundary
-
-- Use the panel's **Export redacted screenshots** action (or send
-  `{ type: "EXPORT_REDACTED_IMAGES" }` to the background script) to save
-  every *sanitized* screenshot ever sent toward the model, under
-  `Downloads/paroksh_redacted/`. These are exactly what left the browser.
-- The raw screenshot and Qwen's local analysis never appear in any network
-  request; only `backend`'s `/api/action` request body (`imageBase64`,
-  `visualContext`) leaves the browser, and both fields are already
-  sanitized/local-only by the time that request is made.
-
-## Project layout
-
+```text
+http://localhost:3000
 ```
+
+You can verify it using:
+
+```text
+http://localhost:3000/api/health
+```
+
+---
+
+## 7. Configure Ollama
+
+Make sure Ollama is running locally and the configured model is available.
+
+PAROKSH currently uses:
+
+```text
+gemma4:31b-cloud
+```
+
+The backend communicates with Ollama through:
+
+```text
+http://localhost:11434
+```
+
+---
+
+## 8. Load PAROKSH in Chrome
+
+1. Open:
+
+```text
+chrome://extensions
+```
+
+2. Enable **Developer mode**.
+3. Select **Load unpacked**.
+4. Select the project's:
+
+```text
+frontend/
+```
+
+directory.
+
+5. Reload the extension after rebuilding any component.
+
+---
+
+# 🧪 Example Tasks
+
+Once PAROKSH is running, users can provide natural-language instructions such as:
+
+```text
+Search Google for the latest AI news.
+```
+
+```text
+Open YouTube and search for Python tutorials.
+```
+
+```text
+Open this form and fill in the required fields.
+```
+
+```text
+Navigate to the specified website and find the requested information.
+```
+
+PAROKSH observes the current browser state, determines an action, executes it, and verifies the resulting screen before continuing.
+
+---
+
+# 🔄 Agent Loop
+
+The core automation process follows an observe → reason → act → verify cycle:
+
+```text
+User Goal
+   ↓
+Observe Browser
+   ↓
+Capture Screenshot
+   ↓
+Local Vision
+   ↓
+PrivacyShield
+   ↓
+Action Model
+   ↓
+Execute Action
+   ↓
+Observe Result
+   ↓
+Verify
+   │
+   ├── Goal Complete → DONE
+   │
+   └── Not Complete → Next Step
+```
+
+The agent does not simply execute a predefined sequence. It repeatedly evaluates the current browser state to determine the next action.
+
+---
+
+# 🖱️ Trusted Input
+
+PAROKSH uses Chrome DevTools Protocol-based input for important browser interactions.
+
+Supported actions include:
+
+```text
+CLICK
+TYPE
+HOVER
+KEY
+SCROLL
+NAVIGATE
+DONE
+```
+
+Using trusted browser input improves compatibility with websites where synthetic JavaScript events may not trigger the expected browser behavior.
+
+This is particularly important for applications such as:
+
+* Google Search
+* Google Docs
+* Google Forms
+* Gmail
+* Dynamic web applications
+
+---
+
+# 🧩 Project Structure
+
+```text
 PAROKSH/
+│
+├── backend/
+│   ├── server.js
+│   ├── package.json
+│   └── ollama/
+│       ├── ollama.js
+│       └── ollama2.js
+│
 ├── frontend/
 │   ├── manifest.json
-│   ├── extension-core/        background.js, content.js, action-executor.js,
-│   │                          privacy-shield.bundle.js (built)
-│   ├── local-vision/          Qwen3.5-0.8B local VLM (new in Phase 1)
-│   │   ├── qwen/               qwen-loader.js, qwen-processor.js,
-│   │   │                       qwen-inference.js, qwen-worker.js,
-│   │   │                       local-vision-manager.js
-│   │   ├── model/Qwen3.5-0.8B-ONNX/   (you copy the model files here)
-│   │   └── qwen-worker.bundle.js      (built)
-│   ├── privacy-shield/        PrivacyShield source (OCR, PII, redaction)
-│   ├── popup-src/              React popup source
-│   └── frontend/               built popup output (popup.html, assets/)
-└── backend/
-    ├── server.js
-    └── ollama/                 ollama.js (action model), ollama2.js (chat reply)
+│   │
+│   ├── local-vision/
+│   │   ├── model/
+│   │   ├── qwen/
+│   │   ├── package.json
+│   │   └── vite.worker.config.ts
+│   │
+│   ├── privacy-shield/
+│   │   ├── privacy/
+│   │   ├── ui/
+│   │   ├── src/
+│   │   └── package.json
+│   │
+│   ├── popup-src/
+│   └── extension-core/
+│
+└── README.md
 ```
-#   p a r o k s h - b r o w s e r - a i  
- 
+
+---
+
+# 🔒 Security & Privacy Principles
+
+PAROKSH follows several important principles:
+
+### Local-first visual processing
+
+The initial visual understanding step happens inside the browser using the local Qwen model.
+
+### Redaction before transmission
+
+PrivacyShield processes screenshots locally before they are sent to the backend.
+
+### Fail-closed privacy boundary
+
+If the privacy processing pipeline fails, the system does not intentionally bypass the redaction stage and transmit the raw screenshot.
+
+### No model weights in Git
+
+Large model files are excluded from the repository to keep the source repository manageable.
+
+---
+
+# ⚠️ Current Limitations
+
+PAROKSH is a **prototype / hackathon project** and should not be considered a production-ready autonomous browser agent.
+
+Current limitations include:
+
+* Local Qwen inference requires compatible hardware/browser support.
+* ONNX model files must be provided separately.
+* Some websites may behave differently because of dynamic UI changes.
+* Browser automation can fail when website layouts change unexpectedly.
+* Ollama must be running for the backend action-planning stage.
+* Performance depends heavily on the user's CPU, GPU, browser, and available memory.
+* Privacy detection cannot guarantee perfect detection of every sensitive element.
+
+---
+
+# 🛠️ Technology Stack
+
+| Component           | Technology               |
+| ------------------- | ------------------------ |
+| Browser Extension   | Chrome Manifest V3       |
+| Local Vision        | Qwen3.5-0.8B             |
+| Local Inference     | Transformers.js + ONNX   |
+| Acceleration        | WebGPU / WASM            |
+| Privacy Layer       | PrivacyShield            |
+| OCR                 | Tesseract-based pipeline |
+| Backend             | Node.js + Express        |
+| Action Model        | Gemma via Ollama         |
+| Browser Interaction | Chrome DevTools Protocol |
+| Frontend Build      | Vite                     |
+| Language            | JavaScript / TypeScript  |
+
+---
+
+# 🎯 Project Goal
+
+PAROKSH explores how browser AI agents can become more **privacy-aware, lightweight, and practical** by combining local visual understanding with a privacy-preserving processing layer.
+
+Instead of sending an untouched browser screenshot directly to a remote vision model:
+
+```text
+Raw Browser Screen
+       ↓
+Local Vision
+       ↓
+Local Privacy Protection
+       ↓
+Sanitized Visual Context
+       ↓
+AI Action Planning
+       ↓
+Browser Automation
+```
+
+This architecture aims to reduce unnecessary exposure of sensitive screen information while retaining the visual context required for browser automation.
+
+---
+
+# 📌 Hackathon Prototype
+
+PAROKSH was developed as an experimental browser automation system demonstrating:
+
+* On-device vision
+* Privacy-aware visual processing
+* AI-driven browser interaction
+* Visual verification
+* Trusted browser input
+* Local + server-side AI coordination
+
+The repository contains the source code required to reproduce the prototype, while large model weights are intentionally provided separately.
+
+---
+
+## License
+
+Add the project's license here if/when a license is selected.
+
+---
+
+## 👨‍💻 Author
+
+**Mayank Sinha**
+
+PAROKSH — AI Browser Agent
